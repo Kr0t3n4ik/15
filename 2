@@ -1,0 +1,108 @@
+import requests
+from bs4 import BeautifulSoup
+import re
+
+
+class _Product:
+
+    def __init__(self, **data):
+        for key,value in data.items():
+            setattr(self, key, value)
+
+    def __repr__(self):
+        return f'< {self.__class__.__name__.replace("_", "")}: {self.title} >'
+
+    def __str__(self):
+        return self.__repr__()
+
+class SoupMixin:
+
+    _html = None
+    _base_url = 'https://pethouse.ua/'
+
+
+    def __init__(self):
+        self.get_html()
+        self.create_soup()
+
+    def get_html(self):
+        r = requests.get(self._base_url)
+        if r.status_code == 200:
+            self._html = r.content
+
+    def create_soup(self):
+        if self._html:
+            self.soup = BeautifulSoup(self._html, 'html.parser')
+
+
+
+class SubCategory(SoupMixin):
+
+    _cache = {}
+
+    def get_subcategory(self):
+        if self._cache.get('subcategories'):
+            return self._cache.get('subcategories')
+
+        items = [elem.find('span').text for elem in self.soup.find_all(class_='top-menu-submenu')]
+        self._cache['subcategories'] = items
+        return items
+
+    def get_subcategory_links(self):
+        if self._cache.get('subcategory_links'):
+            return self._cache.get('subcategory_links')
+
+        links = []
+        for link in self.soup.find_all('div', class_='top-menu-inner'):
+            links.extend([inner_elem['href'] for inner_elem in link.find_all('a', href=True)] )
+        self._cache['subcategory_links'] = links
+        return links
+
+class Product(SoupMixin):
+
+    def __init__(self, product_link):
+        self.product_link = product_link
+        self.num_pages = self._get_num_pages(product_link)
+
+    def get_html(self, product_link):
+        r = requests.get(self._base_url + product_link)
+        if r.status_code == 200:
+            self._html = r.content
+        
+
+    def get_products(self):
+        products = []
+        for page in range(1, self.num_pages + 1):
+            self.get_html(self.product_link +f'page/{page}')
+            self.create_soup()
+            for product in self.soup.find_all(class_='ph-new-catalog-tovar-block-table'):
+                products.append(self._get_product(product))
+        return products
+
+    def _get_product(self, product):
+        product_data = {
+                    'title': re.sub(' +', ' ', product.find(class_='ph-new-catalog-tovar-title').find('a').text.replace('\r\n', '')),
+                    'img':self._base_url[:-1] + product.find(class_='ph-the-new-tovar-image').find(class_='tpl-prod-img').find('a').find('img')['src'],
+                    'link':self._base_url[:-1] + product.find(class_='ph-the-new-tovar-image').find(class_='tpl-prod-img').find('a')['href'],
+                    'short_description': product.find(class_='z2-some-attr').find(class_='ph-new-catalog-tovar-desc-text').text,
+
+                }
+        product_ended = product.find_all(class_='ph-the-new-tovar-price')[0].find(class_='ph-new-cat-no-entry')
+        if product_ended:
+            product_data['price'] = product_ended.text
+        else:
+            product_data['price'] = product.find_all(class_='ph-the-new-tovar-price')[0].find(class_='tpl-wrapper-unit').find(class_='ph-new-catalog-price-block-price').find(class_='ph-new-catalog-price-block-uah').text \
+               + ' ' + product.find_all(class_='ph-the-new-tovar-price')[0].find(class_='tpl-wrapper-unit').find(class_='ph-new-catalog-price-block-price').find(class_='ph-new-catalog-price-block-kop').text
+
+        return _Product(**product_data)
+
+    def _get_num_pages(self, product_link):
+        self.get_html(product_link)
+        self.create_soup()
+        return int(self.soup.find(id='tpl-testimonials-paginator-wrapper').find('ul').find_all('li')[-1].text)
+
+b = SubCategory()
+for product in  Product('shop/koshkam/sredstva-dlya-udaleniya-zapaha/').get_products():
+    print(product.price)
+    
+    
